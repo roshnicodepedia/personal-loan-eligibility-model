@@ -1,0 +1,21 @@
+lender_id,lender_name,lender_type,research_status
+L001,State Bank of India,public_bank,Verified starter
+L002,Bank of Baroda,public_bank,Verified starter
+L003,Punjab National Bank,public_bank,Partial official rules found
+L004,Bank of India,public_bank,Needs detailed verification
+L005,HDFC Bank,private_bank,Verified starter
+L006,Axis Bank,private_bank,Verified starter
+L007,Kotak Mahindra Bank,private_bank,Partial; conflicting page values to reconcile
+L008,Bajaj Finance,nbfc,Verified starter
+L009,Canara Bank,public_bank,Pending
+L010,IndusInd Bank,private_bank,Verified starter
+L011,YES BANK,private_bank,Verified starter
+L012,Federal Bank,private_bank,Pending
+L013,South Indian Bank,private_bank,Pending
+L014,Aditya Birla Finance,nbfc,Partial; product-specific criteria needed
+L015,L&T Finance,nbfc,Verified starter
+L016,Tata Capital,nbfc,Pending
+L017,SMFG India Credit,nbfc,Pending
+L018,Piramal Finance,nbfc,Pending
+L019,IDFC FIRST Bank,private_bank,Verified starter
+L020,DMI Finance,nbfc,Candidate; verify that current public personal loan product fits scope

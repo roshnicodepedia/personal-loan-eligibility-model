@@ -1,0 +1,19 @@
+variable_name,data_type,unit,definition,source,validation_rule,requirement_status
+age_years,integer,years,Applicant's age at application date,Applicant; verify with identity document,age >= 18 and within realistic range,Required
+monthly_net_income,number,INR/month,Regular net monthly income after deductions,Applicant; verify with payslips/bank statement/ITR as applicable,Must be non-negative; income type must be identified,Required
+income_type,category,category,"Whether income is salary, business/professional income, pension, etc.",Applicant and income documents,Allowed values defined in code,Required
+employment_type,category,category,"Salaried, self-employed professional, business owner, etc.",Applicant; employment/business documents,Must be one of supported categories,Required
+employer_category,category,category,Employer type/category where lender uses this factor,Applicant/employer information,Can be unknown if not collected; don't assume pass,Conditional
+cibil_score,integer,score points,"Credit score used by lender, if available",Credit bureau with applicant consent/authorized access,Validate plausible bureau score range; distinguish missing from low,Required for rules that use it
+total_work_experience_months,integer,months,Total work experience,Applicant; CV/employer documents,Must be non-negative,Conditional
+current_employer_months,integer,months,Time spent with current employer,Applicant; employment documents,Must be non-negative and <= total experience when applicable,Conditional
+business_vintage_months,integer,months,Time the self-employed applicant's business/practice has operated,Applicant; business registration/ITR records,Must be non-negative,Conditional
+city,string,city/tier,"Applicant's city, used for location/city-based criteria",Applicant; address proof,Normalize spelling and city tier if lender uses it,Required if lender uses location rules
+existing_monthly_emi,number,INR/month,Current monthly loan/credit obligations counted by lender,Applicant; bureau report/statements,Must be non-negative,Required
+requested_loan_amount,number,INR,Loan amount requested by applicant,Applicant,Must be positive,Required
+requested_tenure_months,integer,months,Preferred repayment tenure,Applicant,Must be positive and compared with lender range,Required
+salary_account_lender,string,lender name/none,Whether salary is credited to a particular lender,Applicant; bank statement,Use explicit 'none' or lender ID; don't infer,Conditional
+nationality_or_residency,category,category,Eligibility condition where lender requires it,Applicant; KYC document,Use only as required by official policy,Conditional
+monthly_business_income,number,INR/month,Average verified monthly income for self-employed applicant,Applicant; ITR/bank statement/business records,Define calculation period and source,Conditional
+employer_name_or_category,string/category,text/category,Employer or approved employer category if lender uses it,Applicant/employer data,Avoid collecting unnecessary personal data; category preferred,Conditional
+research_profile_date,date,YYYY-MM-DD,Date the applicant data is evaluated,System,Valid ISO date,Required
