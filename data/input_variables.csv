@@ -1,0 +1,22 @@
+variable_name,data_type,unit,definition,source,validation_rule,requirement_status
+age_years,integer,years,Applicant age at application; use completed years.,applicant,18 <= value <= 100,Required
+employment_type,category,category,"salaried, self_employed_professional, self_employed_business, doctor, lic_agent, pensioner, other.",applicant,Must be an allowed value,Required
+monthly_net_income,number,INR/month,Verified net monthly income for salaried applicants; use average documented income for self-employed only if supported by product rules.,document,value >= 0; specify income basis,Required
+monthly_gross_income,number,INR/month,Gross monthly income when lender scheme uses gross income.,document,value >= 0,Conditional
+annual_net_income,number,INR/year,"Annual verified net income, especially for professional/self-employed schemes.",document,value >= 0,Conditional
+monthly_business_income,number,INR/month,Average documented monthly business/professional income; separate from salary income.,document,value >= 0 or null,Conditional
+business_vintage_months,integer,months,Months the current business/practice has operated.,document,value >= 0 or null,Conditional
+total_work_experience_months,integer,months,Total work experience.,document,value >= 0 or null,Conditional
+current_employer_months,integer,months,Months with current employer.,document,value >= 0 and <= total experience where applicable,Conditional
+employer_category,category,category,"Government, defence, PSU, MNC, public_limited, private_limited, reputed_company, other, unknown.",applicant,Use only categories required by a lender rule,Conditional
+profession,category,category,"Doctor, LIC agent, other professional, business owner, other.",applicant,Use only for product-specific schemes,Conditional
+cibil_score,integer,score,Credit bureau score provided with applicant consent or authorized source.,bureau,"300 <= value <= 900, or null if no score",Conditional
+cibil_score_missing,boolean,true/false,True if no bureau score is available; not equivalent to a low score.,bureau,"Boolean; if true, cibil_score should be null",Required
+existing_monthly_emi,number,INR/month,Existing monthly debt obligations counted by the lender.,bureau,value >= 0,Required
+requested_loan_amount,number,INR,Loan amount requested.,applicant,value > 0,Required
+requested_tenure_months,integer,months,Requested repayment term.,applicant,value > 0,Required
+salary_account_lender,string,lender name/none,Lender where salary is credited; use explicit lender name or none.,document,Do not infer from other fields,Conditional
+residency_status,category,category,"Indian resident, NRI, other.",document,Allowed values defined in code,Conditional
+city,string,city,City used only where an official lender product has location-specific criteria.,applicant,Normalize city name; do not assume tier rules,Conditional
+net_take_home_after_emi,number,INR/month,"Net take-home after all current and proposed instalments, if the product uses this criterion.",document,value >= 0 or null,Conditional
+requested_profile_date,date,YYYY-MM-DD,"Date applicant is evaluated; system-generated, not an applicant-provided variable.",applicant,ISO date; default to run date,Optional
