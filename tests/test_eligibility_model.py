@@ -76,3 +76,41 @@ def test_statuses_include_potential_match_and_verification_required():
 def test_missing_or_invalid_inputs_are_reported_conservatively():
     out = evaluate_applicant(base_profile(requested_loan_amount=0))
     assert out["validation_errors"]
+
+
+def test_high_existing_emi_reduces_or_blocks_affordability_candidate():
+    baseline = evaluate_applicant(base_profile(existing_monthly_emi=0))
+    burdened = evaluate_applicant(base_profile(existing_monthly_emi=42000))
+    baseline_bank = next(x for x in baseline["results"] if x["lender_name"] == "Bank of Baroda")
+    burdened_bank = next(x for x in burdened["results"] if x["lender_name"] == "Bank of Baroda")
+    assert baseline_bank["foir_supported_cap_inr"] is not None
+    assert burdened_bank["foir_supported_cap_inr"] is not None
+    assert burdened_bank["foir_supported_cap_inr"] < baseline_bank["foir_supported_cap_inr"]
+
+
+def test_salary_multiple_rule_is_evaluated():
+    low_requested = evaluate_applicant(base_profile(requested_loan_amount=100000))
+    high_requested = evaluate_applicant(base_profile(requested_loan_amount=3000000))
+    bank_low = next(x for x in low_requested["results"] if x["lender_name"] == "Bank of India")
+    bank_high = next(x for x in high_requested["results"] if x["lender_name"] == "Bank of India")
+    assert not any("max_salary_multiple" in reason for reason in bank_low["failed_reasons"])
+    assert any("max_salary_multiple" in reason for reason in bank_high["failed_reasons"])
+
+
+def test_profile_level_decision_is_present():
+    out = evaluate_applicant(base_profile())
+    assert out["profile_decision"] in {
+        "potentially_eligible",
+        "not_eligible_under_checked_published_criteria",
+        "unable_to_determine",
+    }
+    assert out["profile_decision_reason"]
+
+
+def test_low_score_and_high_emi_do_not_get_rate_candidate():
+    low_score = evaluate_applicant(base_profile(cibil_score=620))
+    high_emi = evaluate_applicant(base_profile(existing_monthly_emi=42000))
+    assert low_score["recommendation"]["type"] == "no_defensible_candidate"
+    assert high_emi["recommendation"]["type"] == "no_defensible_candidate"
+    assert low_score["profile_decision"] == "unable_to_determine"
+    assert high_emi["profile_decision"] == "unable_to_determine"

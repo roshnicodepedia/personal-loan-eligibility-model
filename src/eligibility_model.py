@@ -213,6 +213,56 @@ def _compare_rule(rule_name: str, profile: dict, rule_value: Any) -> tuple[str, 
             return ("unknown", actual, threshold, "INR")
         return ("passed" if actual <= income * threshold else "failed", actual, income * threshold, "INR")
 
+    if name == "max_salary_multiple":
+        income = _num(profile.get("monthly_gross_income"))
+        amount = _num(profile.get("requested_loan_amount"))
+        multiple = _num(rule_value)
+        if income is None or amount is None or multiple is None:
+            return ("unknown", amount, multiple, "INR")
+        cap = income * multiple
+        return ("passed" if amount <= cap else "failed", amount, cap, "INR")
+
+    if name.startswith("max_foir_pct") or name == "max_emi_to_income_pct":
+        income = _num(profile.get("monthly_net_income"))
+        existing_emi = _num(profile.get("existing_monthly_emi"))
+        amount = _num(profile.get("requested_loan_amount"))
+        tenure = _num(profile.get("requested_tenure_months"))
+        rate = None
+        # Use the lender's published starting rate for affordability screening.
+        # If no usable rate is available, do not guess within this hard-rule check.
+        if income is None or existing_emi is None or amount is None or tenure is None:
+            return ("unknown", None, _num(rule_value), "percent")
+        threshold = _num(rule_value)
+        if threshold is None:
+            return ("unknown", None, None, "percent")
+        # Rule comparison is completed in evaluate_applicant where lender rate is available.
+        return ("unknown", (existing_emi, amount, tenure), threshold, "percent")
+
+    if name == "max_salary_multiple":
+        income = _num(profile.get("monthly_gross_income"))
+        amount = _num(profile.get("requested_loan_amount"))
+        multiple = _num(rule_value)
+        if income is None or amount is None or multiple is None:
+            return ("unknown", amount, multiple, "INR")
+        cap = income * multiple
+        return ("passed" if amount <= cap else "failed", amount, cap, "INR")
+
+    if name.startswith("max_foir_pct") or name == "max_emi_to_income_pct":
+        income = _num(profile.get("monthly_net_income"))
+        existing_emi = _num(profile.get("existing_monthly_emi"))
+        amount = _num(profile.get("requested_loan_amount"))
+        tenure = _num(profile.get("requested_tenure_months"))
+        rate = None
+        # Use the lender's published starting rate for affordability screening.
+        # If no usable rate is available, do not guess within this hard-rule check.
+        if income is None or existing_emi is None or amount is None or tenure is None:
+            return ("unknown", None, _num(rule_value), "percent")
+        threshold = _num(rule_value)
+        if threshold is None:
+            return ("unknown", None, None, "percent")
+        # Rule comparison is completed in evaluate_applicant where lender rate is available.
+        return ("unknown", (existing_emi, amount, tenure), threshold, "percent")
+
     if name == "eligible_employment_types":
         allowed = str(rule_value).lower()
         employment = str(profile.get("employment_type", "")).lower()
@@ -271,6 +321,30 @@ def evaluate_applicant(profile: dict, rules_path: Path = RULES_PATH) -> dict:
                 continue
 
             status, actual, threshold, unit = _compare_rule(rule_name, profile, row.get("rule_value"))
+            if rule_name.lower().startswith("max_foir_pct") or rule_name.lower() == "max_emi_to_income_pct":
+                # FOIR = (existing EMI + proposed loan EMI) / net monthly income.
+                income = _num(profile.get("monthly_net_income"))
+                existing_emi = _num(profile.get("existing_monthly_emi"))
+                amount = _num(profile.get("requested_loan_amount"))
+                tenure = _num(profile.get("requested_tenure_months"))
+                rate_rows = group[(group["rule_name"].astype(str) == "min_interest_rate_pct") &
+                                  (group["evidence_status"].astype(str).str.lower() == "verified_current")]
+                rate = _num(rate_rows.iloc[0]["rule_value"]) if not rate_rows.empty else None
+                estimated_rate_used = rate is None
+                if rate is None:
+                    # Explicit modelling assumption used only to test FOIR affordability
+                    # where a lender publishes FOIR but no usable starting rate is recorded.
+                    rate = 18.0
+                    notes.append("FOIR affordability uses an estimated 18% p.a. rate because no usable published starting rate is recorded; this is not a lender quote.")
+                threshold_pct = _num(row.get("rule_value"))
+                if all(v is not None for v in (income, existing_emi, amount, tenure, rate, threshold_pct)) and income > 0:
+                    proposed_emi = calculate_emi(amount, rate, tenure)
+                    actual = ((existing_emi + proposed_emi) / income) * 100 if proposed_emi is not None else None
+                    threshold = threshold_pct
+                    unit = "percent"
+                    status = "passed" if actual is not None and actual <= threshold_pct else ("failed" if actual is not None else "unknown")
+                else:
+                    status, actual, threshold, unit = "unknown", None, threshold_pct, "percent"
             if status == "failed":
                 failed_reasons.append(f"{rule_name}: actual {actual} vs threshold {threshold} {unit}")
             elif status == "unknown":
@@ -304,6 +378,52 @@ def evaluate_applicant(profile: dict, rules_path: Path = RULES_PATH) -> dict:
                 return None
             return _num(value)
 
+        # Applicant-specific indicative loan ceiling: product cap, salary multiple,
+        # and FOIR-supported amount (where an evidenced FOIR and usable rate exist).
+        product_cap = published_value("max_loan_amount")
+        salary_multiple_row = group[(group["rule_name"].astype(str) == "max_salary_multiple") &
+                                    (group["evidence_status"].astype(str).str.lower() == "verified_current")]
+        salary_cap = None
+        if not salary_multiple_row.empty:
+            multiple = _num(salary_multiple_row.iloc[0]["rule_value"])
+            gross = _num(profile.get("monthly_gross_income"))
+            if multiple is not None and gross is not None:
+                salary_cap = gross * multiple
+        foir_rows = group[(group["rule_name"].astype(str).str.startswith("max_foir_pct")) &
+                          (group["evidence_status"].astype(str).str.lower() == "verified_current")]
+        foir_cap = None
+        foir_limit = _num(foir_rows.iloc[0]["rule_value"]) if not foir_rows.empty else 50.0
+        foir_limit_is_estimate = foir_rows.empty
+        if foir_limit_is_estimate:
+            notes.append("Indicative maximum amount uses a 50% FOIR assumption because no usable lender-specific FOIR is recorded; this is a model estimate, not a lender rule.")
+        rate_for_cap = published_value("min_interest_rate_pct")
+        foir_rate_estimate = rate_for_cap is None and foir_limit is not None
+        if foir_rate_estimate:
+            rate_for_cap = 18.0  # estimated assumption; not a lender quote
+            notes.append("Indicative maximum amount uses an estimated 18% p.a. rate because no usable published starting rate is recorded; this is not a lender quote.")
+        tenure_for_cap = published_value("max_tenure_months")
+        if tenure_for_cap is None:
+            tenure_rows = group[group["rule_name"].astype(str).str.startswith("max_tenure_months")]
+            tenure_values = [_num(v) for v in tenure_rows.loc[tenure_rows["evidence_status"].astype(str).str.lower().eq("verified_current"), "rule_value"]]
+            tenure_values = [v for v in tenure_values if v is not None]
+            tenure_for_cap = max(tenure_values) if tenure_values else None
+        income_for_cap = _num(profile.get("monthly_net_income"))
+        existing_for_cap = _num(profile.get("existing_monthly_emi"))
+        if all(v is not None for v in (foir_limit, rate_for_cap, tenure_for_cap, income_for_cap, existing_for_cap)) and income_for_cap > 0:
+            available_emi = max(0.0, income_for_cap * foir_limit / 100.0 - existing_for_cap)
+            # Invert the EMI formula with a binary search to estimate principal.
+            lo, hi = 0.0, max(product_cap or 10000000.0, 10000000.0)
+            for _ in range(70):
+                mid = (lo + hi) / 2
+                emi_mid = calculate_emi(mid, rate_for_cap, tenure_for_cap)
+                if emi_mid is not None and emi_mid <= available_emi:
+                    lo = mid
+                else:
+                    hi = mid
+            foir_cap = lo
+        caps = [v for v in (product_cap, salary_cap, foir_cap) if v is not None and v >= 0]
+        applicant_max = min(caps) if caps else None
+
         results.append({
             "lender_id": lender_id,
             "lender_name": lender_name,
@@ -314,6 +434,13 @@ def evaluate_applicant(profile: dict, rules_path: Path = RULES_PATH) -> dict:
             "conflicting_rules": sorted(set(conflicting_rules)),
             "advisory_preferences": sorted(set(advisory)),
             "published_max_loan_amount_inr": published_value("max_loan_amount"),
+            "indicative_applicant_max_loan_amount_inr": applicant_max,
+            "salary_multiple_cap_inr": salary_cap,
+            "foir_supported_cap_inr": foir_cap,
+            "foir_limit_pct": foir_limit,
+            "foir_limit_is_estimate": foir_limit_is_estimate,
+            "foir_calculation_rate_pct": rate_for_cap,
+            "foir_rate_is_estimate": foir_rate_estimate,
             "published_min_loan_amount_inr": published_value("min_loan_amount"),
             "advertised_starting_rate_pct": published_value("min_interest_rate_pct"),
             "advertised_max_rate_pct": published_value("max_interest_rate_pct"),
@@ -329,9 +456,22 @@ def evaluate_applicant(profile: dict, rules_path: Path = RULES_PATH) -> dict:
     for item in results:
         if item["status"] != "potential_match":
             continue
+        # Do not recommend a lender unless a usable published minimum-age criterion
+        # was checked; missing age rules are a material underwriting unknown.
+        if not any(str(check.get("rule", "")).startswith("min_age") for check in item.get("checks", [])):
+            continue
+        # Low or missing bureau scores require an explicit passed published score rule
+        # before a lender can be highlighted as a candidate.
+        score = _num(profile.get("cibil_score"))
+        score_missing = str(profile.get("cibil_score_missing", False)).lower() in {"true", "1", "yes"}
+        score_checked = any("cibil_score" in str(check.get("rule", "")).lower() for check in item.get("checks", []))
+        if (score_missing or (score is not None and score < 700)) and not score_checked:
+            continue
         if item["advertised_starting_rate_pct"] is None:
             continue
-        max_amount = item.get("published_max_loan_amount_inr")
+        max_amount = item.get("indicative_applicant_max_loan_amount_inr")
+        if max_amount is None:
+            max_amount = item.get("published_max_loan_amount_inr")
         max_tenure = item.get("published_max_tenure_months")
         if max_amount is None or max_tenure is None:
             continue
@@ -348,21 +488,49 @@ def evaluate_applicant(profile: dict, rules_path: Path = RULES_PATH) -> dict:
             "type": "indicative_public_rate_candidate",
             "lender_id": best["lender_id"],
             "lender_name": best["lender_name"],
-            "reason": f"Lowest advertised starting rate of {best['advertised_starting_rate_pct']}% p.a. among lenders with a matching potential profile and no failed hard rule.",
+            "reason": f"Lowest advertised starting rate ({best['advertised_starting_rate_pct']}% p.a.) among screened candidates with no failed checked hard rule and sufficient recorded product/affordability limits.",
+            "indicative_max_loan_amount_inr": best.get("indicative_applicant_max_loan_amount_inr") if best.get("indicative_applicant_max_loan_amount_inr") is not None else best.get("published_max_loan_amount_inr"),
+            "expected_rate_pct_min": best.get("advertised_starting_rate_pct"),
+            "expected_rate_pct_max": best.get("advertised_max_rate_pct"),
+            "possible_tenure_months_max": best.get("published_max_tenure_months"),
             "caution": "This is an indicative screening result only and not a confirmation of approval, a personalized quote, or a final lender decision.",
         }
     else:
+        score = _num(profile.get("cibil_score"))
+        score_missing = str(profile.get("cibil_score_missing", False)).lower() in {"true", "1", "yes"}
+        income = _num(profile.get("monthly_net_income"))
+        existing_emi = _num(profile.get("existing_monthly_emi"))
+        if score_missing:
+            no_candidate_reason = "No defensible candidate: the applicant's credit score is missing, so a reliable score-based screen cannot be completed."
+        elif score is not None and score < 700:
+            no_candidate_reason = "No defensible candidate: the score is low and the current evidence does not support a lender-specific published score rule pass for a responsible recommendation."
+        elif income and existing_emi is not None and existing_emi / income >= 0.50:
+            no_candidate_reason = "No defensible candidate: existing EMI already uses at least 50% of net monthly income, leaving no or limited capacity under the model's explicitly estimated 50% FOIR scenario."
+        else:
+            no_candidate_reason = "No lender had enough non-conflicting published evidence and matching product/affordability limits to support a defensible candidate for this profile."
         rec = {
             "type": "no_defensible_candidate",
             "lender_id": None,
             "lender_name": None,
-            "reason": "No lender had enough non-conflicting published evidence to support a defensible candidate for this profile.",
+            "reason": no_candidate_reason,
             "caution": "Obtain current, lender-specific offers and verify product details before choosing a lender.",
         }
+
+    if rec.get("lender_name"):
+        profile_decision = "potentially_eligible"
+        profile_decision_reason = "At least one lender is a defensible indicative comparison candidate under the checked rules and available assumptions; this is not approval."
+    elif results and all(r["status"] == "does_not_meet_published_criteria" for r in results):
+        profile_decision = "not_eligible_under_checked_published_criteria"
+        profile_decision_reason = "Every screened lender failed at least one checked published hard criterion."
+    else:
+        profile_decision = "unable_to_determine"
+        profile_decision_reason = "Available public rules are incomplete, conflicting, or insufficient to determine eligibility reliably."
 
     return {
         "profile_id": profile.get("profile_id", "unknown"),
         "profile_name": profile.get("profile_name", ""),
+        "profile_decision": profile_decision,
+        "profile_decision_reason": profile_decision_reason,
         "validation_errors": [],
         "results": results,
         "recommendation": rec,
@@ -390,6 +558,12 @@ def main():
             "profile_name": result.get("profile_name", ""),
             "recommendation_type": recommendation.get("type"),
             "indicative_candidate_lender": recommendation.get("lender_name"),
+            "indicative_max_loan_amount_inr": recommendation.get("indicative_max_loan_amount_inr"),
+            "expected_rate_pct_min": recommendation.get("expected_rate_pct_min"),
+            "expected_rate_pct_max": recommendation.get("expected_rate_pct_max"),
+            "possible_tenure_months_max": recommendation.get("possible_tenure_months_max"),
+            "profile_decision": result.get("profile_decision"),
+            "profile_decision_reason": result.get("profile_decision_reason"),
             "reason": recommendation.get("reason"),
             "caution": recommendation.get("caution"),
         })
@@ -400,6 +574,11 @@ def main():
                 "lender_id": lender["lender_id"],
                 "lender_name": lender["lender_name"],
                 "status": lender["status"],
+                "profile_decision": result.get("profile_decision"),
+                "profile_decision_reason": result.get("profile_decision_reason"),
+                "indicative_applicant_max_loan_amount_inr": lender.get("indicative_applicant_max_loan_amount_inr"),
+                "advertised_max_rate_pct": lender.get("advertised_max_rate_pct"),
+                "published_min_tenure_months": lender.get("published_min_tenure_months"),
                 "failed_reasons": " | ".join(lender["failed_reasons"]),
                 "missing_information": " | ".join(lender["missing_information"]),
                 "conflicting_rules": " | ".join(lender["conflicting_rules"]),

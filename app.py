@@ -2,21 +2,17 @@ from __future__ import annotations
 import sys
 import math
 from pathlib import Path
-
 import pandas as pd
 import streamlit as st
-
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))
 from eligibility_model import evaluate_applicant  # noqa: E402
-
 st.set_page_config(
     page_title="Personal Loan Eligibility Checker",
     page_icon="🏦",
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
 st.markdown("""
 <style>
 :root { --navy:#13294b; --blue:#1769e0; --pale:#eef5ff; --line:#e3eaf4; }
@@ -34,7 +30,6 @@ st.markdown("""
 .stButton > button[kind="primary"] { background:#1769e0; border-color:#1769e0; border-radius:10px; font-weight:650; min-height:2.8rem; }
 </style>
 """, unsafe_allow_html=True)
-
 with st.sidebar:
     st.markdown("## 🏦 LoanLens")
     st.caption("Personal Loan Eligibility Checker")
@@ -44,26 +39,21 @@ with st.sidebar:
     st.markdown("- 20 Indian lenders\n- Public-rule screening\n- Reason and conflict explanations\n- Indicative rate comparison")
     st.divider()
     st.caption("Educational prototype • No lender approval guarantee")
-
 st.markdown("""
 <div class="hero">
   <h1>Personal Loan Eligibility Checker</h1>
   <p>Enter applicant details to compare them with published criteria across 20 Indian lenders — transparently, with reasons and caveats.</p>
 </div>
 """, unsafe_allow_html=True)
-
 @st.cache_data
 def get_lenders():
     df = pd.read_csv(ROOT / "data" / "lender_master.csv")
     return df["lender_name"].dropna().tolist()
-
 lenders = get_lenders()
-
 def format_inr(value):
     if value is None or pd.isna(value):
         return "Not available"
     return "₹" + format(int(round(float(value))), ",")
-
 def estimate_emi(principal, annual_rate_pct, months):
     """Calculate indicative EMI; this excludes fees, insurance and lender-specific charges."""
     if principal is None or annual_rate_pct is None or months is None or months <= 0:
@@ -73,7 +63,6 @@ def estimate_emi(principal, annual_rate_pct, months):
         return float(principal) / int(months)
     factor = (1 + monthly_rate) ** int(months)
     return float(principal) * monthly_rate * factor / (factor - 1)
-
 if page in ("Check eligibility", "Compare lenders"):
     st.markdown('<div class="section-title">1 · Applicant details</div>', unsafe_allow_html=True)
     with st.form("applicant_form"):
@@ -103,7 +92,6 @@ if page in ("Check eligibility", "Compare lenders"):
         with f:
             residency = st.selectbox("Residency", ["Indian resident", "NRI", "Other / unsure"])
         submitted = st.form_submit_button("🔎 Check published criteria", type="primary", use_container_width=True)
-
     if submitted:
         profile = {
             "profile_id": "UI-001", "profile_name": "Applicant entered in UI", "age_years": age,
@@ -119,7 +107,6 @@ if page in ("Check eligibility", "Compare lenders"):
         result = evaluate_applicant(profile)
         st.session_state["loan_result"] = result
         st.session_state["loan_profile"] = profile
-
     result = st.session_state.get("loan_result")
     if result:
         if result.get("validation_errors"):
@@ -129,6 +116,8 @@ if page in ("Check eligibility", "Compare lenders"):
             failed = sum(r["status"] == "does_not_meet_published_criteria" for r in rows)
             uncertain = sum(r["status"] == "insufficient_information" for r in rows)
             st.markdown('<div class="section-title">3 · Screening results</div>', unsafe_allow_html=True)
+            st.subheader("Overall screening decision: " + str(result.get("profile_decision", "unable_to_determine")).replace("_", " ").title())
+            st.write(result.get("profile_decision_reason", "The public-rule dataset is incomplete; verify directly with lenders."))
             k1, k2, k3 = st.columns(3)
             with k1:
                 st.metric("Lenders screened", len(rows))
@@ -143,12 +132,16 @@ if page in ("Check eligibility", "Compare lenders"):
                 st.info("No defensible rate-based candidate found for this profile. " + str(rec.get("reason", "")))
             st.markdown('<div class="disclaimer">A “published criteria not met” result means at least one checked public rule failed. “Need more information” does not mean rejection. A clean result is not loan approval; lender underwriting and product-specific conditions still apply.</div>', unsafe_allow_html=True)
             st.write("")
-            view = st.radio("Show", ["All lenders", "Criteria not met", "Need more information"], horizontal=True, key="results_view")
+            view = st.radio("Show", ["All lenders", "Potential matches", "Criteria not met", "Need more information", "Verification required"], horizontal=True, key="results_view")
             visible = rows
-            if view == "Criteria not met":
+            if view == "Potential matches":
+                visible = [r for r in rows if r["status"] == "potential_match"]
+            elif view == "Criteria not met":
                 visible = [r for r in rows if r["status"] == "does_not_meet_published_criteria"]
             elif view == "Need more information":
                 visible = [r for r in rows if r["status"] == "insufficient_information"]
+            elif view == "Verification required":
+                visible = [r for r in rows if r["status"] == "verification_required"]
             # Source/evidence lookup keeps the UI transparent about where values came from.
             rules_df = pd.read_csv(ROOT / "data" / "lender_rules.csv").fillna("")
             display_rows = []
@@ -157,19 +150,38 @@ if page in ("Check eligibility", "Compare lenders"):
                 max_rate = r["advertised_max_rate_pct"]
                 emi_low = estimate_emi(requested_amount, start_rate, tenure)
                 emi_high = estimate_emi(requested_amount, max_rate, tenure)
+                applicant_cap = r.get("indicative_applicant_max_loan_amount_inr")
+                if applicant_cap is None or pd.isna(applicant_cap):
+                    affordability_note = "Could not estimate affordability from available data"
+                elif float(applicant_cap) <= 0:
+                    affordability_note = "Estimated affordable amount is ₹0; do not treat as a loan recommendation"
+                elif float(applicant_cap) < requested_amount:
+                    affordability_note = "Requested amount exceeds the indicative applicant cap"
+                else:
+                    affordability_note = "Requested amount is within the indicative cap only; not approval"
+
                 display_rows.append({
                     "Lender": r["lender_name"],
-                    "Screening result": "Criteria not met" if r["status"] == "does_not_meet_published_criteria" else "Need more information",
+                    "Screening result": {
+                        "potential_match": "Potential match on checked criteria — not approval",
+                        "does_not_meet_published_criteria": "Published criterion not met",
+                        "insufficient_information": "Insufficient information",
+                        "verification_required": "Verification required",
+                    }.get(r["status"], r["status"]),
+                    "Affordability note": affordability_note,
                     "Starting rate (% p.a.)": start_rate if start_rate is not None else "Not recorded / verify",
                     "Published max rate (% p.a.)": max_rate if max_rate is not None else "Not recorded / verify",
                     "Indicative EMI at starting rate": format_inr(emi_low) if emi_low is not None else "Cannot estimate",
                     "Indicative EMI at max rate": format_inr(emi_high) if emi_high is not None else "Cannot estimate",
-                    "Published max loan": format_inr(r["published_max_loan_amount_inr"]) if r["published_max_loan_amount_inr"] is not None else "Not recorded / verify",
+                    "Published product cap": format_inr(r["published_max_loan_amount_inr"]) if r["published_max_loan_amount_inr"] is not None else "Not recorded / verify",
+                    "Indicative applicant max": format_inr(r.get("indicative_applicant_max_loan_amount_inr")) if r.get("indicative_applicant_max_loan_amount_inr") is not None else "Not enough data",
                     "Max tenure (months)": r["published_max_tenure_months"] if r["published_max_tenure_months"] is not None else "Not recorded / verify",
                 })
+            st.caption("Screening status and affordability are different: a lender can match some checked published criteria while the requested amount may exceed the model's indicative applicant cap. This is not approval.")
             st.caption(f"Indicative EMI estimates for {format_inr(requested_amount)} over {tenure} months, using advertised product rates where available. Actual offers, fees, insurance, APR and lender-specific pricing may differ.")
             st.info("‘Not recorded / verify’ means this project’s current research file does not contain a usable verified value. It does NOT mean the lender does not publish the information.")
-            st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
+            display_df = pd.DataFrame(display_rows).astype(str)
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
             with st.expander("Audit trail: official source URLs and evidence status"):
                 for r in visible:
                     subset = rules_df[rules_df["lender_name"].astype(str) == r["lender_name"]]
@@ -200,7 +212,6 @@ if page in ("Check eligibility", "Compare lenders"):
                         for note in r["notes"][:4]: st.caption(note)
             export_df = pd.DataFrame(display_rows)
             st.download_button("⬇️ Download this comparison (CSV)", pd.DataFrame(display_rows).to_csv(index=False).encode("utf-8"), "loan_lender_comparison.csv", "text/csv")
-
 elif page == "About this project":
     st.markdown("### About LoanLens")
     st.write("LoanLens is an educational, rule-based screening prototype that compares applicant information against a researched set of published personal-loan criteria for 20 Indian lenders.")
@@ -209,6 +220,5 @@ elif page == "About this project":
     st.markdown("1. Applicant enters basic profile and requested loan details.\n2. The Python rule engine checks applicable, verified hard rules.\n3. The app displays failed criteria, unknowns, conflicts and available public product terms.\n4. A rate-based candidate is shown only when the current rule engine can defensibly compare the published values.")
     st.markdown("### Data quality note")
     st.write("The research dataset contains rules that need further source rechecking. ‘Not recorded / verify’ means this dataset does not currently have a usable verified value; it does not claim that the lender does not publish it. A candidate is suppressed when the model detects missing information, failed checks, or unresolved source conflicts. Treat outputs as preliminary screening only and verify each lender's current product terms directly before using the results.")
-
 st.divider()
 st.caption("LoanLens • Personal Loan Eligibility Model • Research snapshot: 12 October 2026 • Never enter account numbers, PAN, Aadhaar, passwords or other sensitive identifiers.")

@@ -19,4 +19,3 @@ salary_account_lender,string,lender name/none,Lender where salary is credited; u
 residency_status,category,category,"Indian resident, NRI, other.",document,Allowed values defined in code,Conditional
 city,string,city,City used only where an official lender product has location-specific criteria.,applicant,Normalize city name; do not assume tier rules,Conditional
 net_take_home_after_emi,number,INR/month,"Net take-home after all current and proposed instalments, if the product uses this criterion.",document,value >= 0 or null,Conditional
-requested_profile_date,date,YYYY-MM-DD,"Date applicant is evaluated; system-generated, not an applicant-provided variable.",applicant,ISO date; default to run date,Optional
